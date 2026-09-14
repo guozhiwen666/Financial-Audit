@@ -3,6 +3,7 @@ name = "financial-audit"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "dotenv>=0.9.9",
     "langchain>=1.4.0",
     "langgraph>=1.2.11",
     "openai>=3.13.0",
