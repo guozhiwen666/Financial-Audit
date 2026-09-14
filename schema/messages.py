@@ -34,7 +34,7 @@ class DocumentStatusMessage:
 
     document_id: int                             # 单据主键，定位是哪一张单据
     document_status: DocumentStatus              # 单据当前状态（如提交后变为待审批）
-    current_version: int                          # 当前版本号，版本变化时申请人需注意重提
+    current_version: int                         # 当前版本号，版本变化时申请人需注意重提
 
 
 @dataclass
