@@ -1,16 +1,17 @@
-"""审核会话表结构（PRD 2.7.10、2.7.6）。
+"""审核会话表结构（PRD 2.7.10、2.7.6 + 12.3 G09）。
 
 _nullability_：PRD 未定义各列可空性，此处仅主键必填，其余字段一律可空。
 """
 
 from dataclasses import dataclass        # dataclass：声明纯字段结构
-from datetime import datetime            # datetime：会话创建/更新时间戳
+from datetime import datetime            # datetime：会话与槽位更新时间戳
 
 from schema.enums import DocumentType    # DocumentType：会话中已确认的单据类型
 
 __all__ = [
     "ReviewSession",     # 审核会话表
     "SessionMessage",    # 会话消息表
+    "SessionSlot",       # 会话槽位状态表（G09）
 ]
 
 
@@ -37,3 +38,19 @@ class SessionMessage:
     content: str | None = None                     # 消息内容
     message_type: str | None = None                # 消息类型（PRD 未列举取值，保持字符串）
     created_at: datetime | None = None             # 消息产生时间
+
+
+@dataclass
+class SessionSlot:
+    """session_slots 表 G09：多轮交互的槽位状态。
+
+    为 PRD 2.7.6"系统在会话中保存已确认的单据类型和单据编号，不重复询问已确认信息"
+    提供持久化落点：刷新页面或跨会话恢复后，仍能按 ``is_confirmed`` 判断是否还需追问。
+    """
+
+    id: int                                        # 主键
+    session_id: int | None = None                  # 所属会话主键，指向 review_sessions.id
+    slot_name: str | None = None                   # 槽位名称（如单据类型、单据编号）
+    slot_value: str | None = None                  # 已确认的槽位取值
+    is_confirmed: bool | None = None               # 是否已确认；已确认则不再重复询问
+    updated_at: datetime | None = None             # 最近一次更新时间
