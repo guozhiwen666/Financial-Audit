@@ -6,5 +6,8 @@ dependencies = [
     "langchain>=1.4.0",
     "langgraph>=1.2.11",
     "openai>=3.13.0",
+    "Pillow>=11.0.0",
     "pydantic>=2.13.5",
+    "pypdf>=5.0.0",
+    "pytesseract>=0.3.13",
 ]
