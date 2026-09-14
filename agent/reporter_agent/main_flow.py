@@ -6,10 +6,14 @@
 （留痕只可追加，不可修改或删除，PRD 20.1 P7）。
 """
 
-from datetime import datetime, timezone  # 报告生成时间与留痕时间
+import json  # 事实清单的序列化（作为报告撰写提示词的输入）
+from datetime import date, datetime, timezone  # 报告生成时间与留痕时间
+from decimal import Decimal  # 金额的文本化
+from enum import Enum  # 枚举的文本化
 
-from schema.enums import RiskLevel  # 整体风险等级
+from schema.enums import Recommendation, RiskLevel  # 整体风险等级与处理建议
 from schema.tables_analysis import ManualReview, ReviewReport, RiskFinding  # 报告与复核记录
+from schema.tables_document import FinancialDocument  # 单据实体（报告摘要的事实来源）
 from schema.tables_reference import AuditLog  # 操作审计留痕
 
 from agent.utils.llm import LLMClient  # 公共大模型调用封装（PRD 20.4 L11）
@@ -22,6 +26,25 @@ EXPORT_FORMATS = ("markdown", "pdf", "html")
 # PRD 第 15 章规定的报告章节
 REPORT_SECTIONS = ("单据摘要", "整体风险", "金额核对", "风险项列表", "证据列表",
                    "供应商风险", "处理建议", "人工复核")
+# 处理建议的取值集合由 PRD 2.7.13 / 第 15 章规定；其推导规则 PRD 未明确，
+# 故此处按整体风险等级做**确定性映射**（本项目约定，未经大模型判定）：低→建议通过、
+# 中→人工复核、高→建议驳回。取值「补充材料」由人工复核时按需选择。
+RECOMMENDATION_BY_LEVEL = {
+    RiskLevel.LOW: Recommendation.APPROVE,
+    RiskLevel.MEDIUM: Recommendation.MANUAL_REVIEW,
+    RiskLevel.HIGH: Recommendation.REJECT,
+}
+
+
+def _json_default(value):
+    """JSON 序列化兜底：枚举取取值、金额与时间转字符串（与接口序列化口径一致）。"""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
 
 
 class ReporterAgent:
@@ -31,12 +54,14 @@ class ReporterAgent:
         self.llm = llm
         self.publisher = publisher
 
-    def run(self, task_id: int, document_id: int, findings: list[RiskFinding],
+    def run(self, task_id: int, document: FinancialDocument, findings: list[RiskFinding],
             overall_level: RiskLevel, amount_comparison: dict, reviews: list[ManualReview],
-            fmt: str = "markdown") -> ReviewReport:
+            attachment_count: int = 0, fmt: str = "markdown") -> ReviewReport:
         """主流程：载入结论 → 生成面板 → 撰写正文 → 导出报告 → 归档复核 → 写审计留痕。"""
         self.task_id = task_id
-        self.document_id = document_id
+        self.document = document
+        self.document_id = document.id or 0
+        self.attachment_count = attachment_count
         self.step1_load_findings(findings, overall_level)
         self.risk_summary = self.step2_build_panels(amount_comparison)
         self.report = self.step3_write_report()
@@ -55,22 +80,53 @@ class ReporterAgent:
         """生成面板数据：按风险等级与风险类型统计数量（确定性聚合，PRD 6.2.8 分类统计）。"""
         summary = {level.value: sum(1 for f in self.findings if f.risk_level is level)
                    for level in RiskLevel}
-        summary["by_type"] = {f.risk_type: sum(1 for g in self.findings if g.risk_type == f.risk_type)
-                              for f in self.findings}
+        summary["by_type"] = {
+            f.risk_type: sum(1 for g in self.findings if g.risk_type == f.risk_type)
+            for f in self.findings}
         self.amount_comparison = amount_comparison
         return summary
 
     def step3_write_report(self) -> ReviewReport:
-        """【大模型 L11】按 PRD 第 15 章章节撰写正文，并组装报告（等级与建议沿用既有结论）。"""
+        """【大模型 L11】按 PRD 第 15 章章节撰写正文（等级与建议沿用既有结论，不重新判定）。
+
+        提示词只提供本次审核的**真实事实**（单据摘要、整体风险、金额核对、风险项四要素），
+        并要求事实缺失处写「未提供」——禁止模型编造编号、金额、数量或供应商
+        （PRD 20.1 P1 判定不由模型承担、P4 智能体只产出结论）。
+        """
+        # 步骤 1：组装事实清单——单据摘要取 PRD 15 列举的字段，金额核对与风险项均取既有结论
+        document = self.document
+        facts = {
+            "单据摘要": {
+                "单据类型": document.document_type, "单据编号": document.document_no,
+                "申请人": document.applicant_id, "申请部门": document.applicant_department,
+                "预算部门": document.budget_department, "收款单位": document.payee_name,
+                "总金额": document.total_amount, "币种": document.currency,
+                "申请日期": document.apply_date, "事由": document.reason_text,
+                "附件数量": self.attachment_count},
+            "整体风险": {"整体等级": self.overall_level,
+                         "数量统计": self.risk_summary,
+                         "处理建议": RECOMMENDATION_BY_LEVEL.get(self.overall_level)},
+            "金额核对": self.amount_comparison,
+            "风险项列表": [{"风险类型": f.risk_type, "风险等级": f.risk_level,
+                            "风险标题": f.risk_title, "风险描述": f.description,
+                            "实际值": f.actual_value_json, "参考值": f.reference_value_json,
+                            "规则阈值": f.threshold_json, "处理建议": f.suggestion_text,
+                            "复核状态": f.review_status} for f in self.findings],
+        }
+        # 步骤 2：要求模型只做归纳与措辞，缺失事实写「未提供」（PRD 16 结论须保留数据来源）
         body = self.llm.complete(
-            "按以下章节撰写财务单据风险审核报告：%s。\n整体风险等级：%s\n风险项：%s"
-            % ("、".join(REPORT_SECTIONS), self.overall_level.value,
-               [f.risk_title for f in self.findings]))
-        return ReviewReport(id=0,  # 主键待落库后回填，故以 0 占位（schema 约定主键必填）
+            "你是财务单据风险审核报告的撰写员。请**仅依据下列事实**撰写报告，逐项覆盖这些章节：%s。\n"
+            "硬性要求：不得编造任何单据编号、金额、数量、供应商名称或日期；"
+            "事实中缺失的内容一律写「未提供」；金额与等级直接引用事实中的取值。\n"
+            "事实：%s" % ("、".join(REPORT_SECTIONS),
+                          json.dumps(facts, ensure_ascii=False, default=_json_default)))
+        # 步骤 3：组装报告实体（主键待落库后回填，故以 0 占位）
+        return ReviewReport(id=0,
                             task_id=self.task_id, document_id=self.document_id,
                             overall_risk_level=self.overall_level,
                             risk_summary_json=self.risk_summary,
                             amount_comparison_json=self.amount_comparison,
+                            recommendation=RECOMMENDATION_BY_LEVEL.get(self.overall_level),
                             report_markdown=body, created_at=datetime.now(timezone.utc))
 
     def step4_export_report(self, fmt: str) -> None:

@@ -186,7 +186,8 @@ class DocumentCreationFlow:
         elif kind is DocumentType.EXPENSE_REIMBURSEMENT:  # PRD 5.3 费用明细合计
             checks = (("费用明细合计", line_total, document.total_amount),)
         elif kind is DocumentType.TRAVEL_REIMBURSEMENT:  # PRD 5.3 差旅费合计
-            travel = sum((getattr(document, n) or Decimal(0) for n in TRAVEL_FEE_FIELDS), Decimal(0))
+            travel = sum((getattr(document, n) or Decimal(0) for n in TRAVEL_FEE_FIELDS),
+                         Decimal(0))
             checks = (("差旅费合计（交通费+住宿费+餐费+补贴）", travel, document.total_amount),)
         # 步骤 3：逐项比对「实际值」与「应有值」，不一致即抛错并给出双方取值（PRD 9.3 可解释性）
         for name, actual, expected in checks:

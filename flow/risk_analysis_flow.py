@@ -65,7 +65,8 @@ class RiskAnalysisFlow:
         amounts = {
             "document_amount": document.total_amount,   # 单据总金额（基准）
             "line_item_total": sum((i.amount or Decimal(0) for i in line_items), Decimal(0)),
-            "invoice_total": sum((i.amount_including_tax or Decimal(0) for i in invoices), Decimal(0)),
+            "invoice_total": sum((i.amount_including_tax or Decimal(0) for i in invoices),
+                                 Decimal(0)),
             "contract_amount": contract_amount,         # 合同金额：来自合同附件解析字段
             "payment_amount": document.amount,          # 付款金额：单据支出金额（PRD 5.2）
         }

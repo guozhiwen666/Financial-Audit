@@ -58,7 +58,7 @@ class ApprovalInstance:
     document_id: int | None = None                                # 所属单据主键，指向 financial_documents.id
     document_version: int | None = None                           # 该实例对应的单据版本号
     instance_status: ApprovalInstanceStatus | None = None          # 实例状态（流转中/已通过等）
-    current_node_id: int | None = None                            # 当前所处节点主键，指向 approval_workflow_nodes.id
+    current_node_id: int | None = None                            # 当前所处节点主键（指向流程节点表）
     started_at: datetime | None = None                            # 实例启动时间
     finished_at: datetime | None = None                           # 实例结束时间（未结束时为空）
 

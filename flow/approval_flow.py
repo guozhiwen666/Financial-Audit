@@ -64,7 +64,8 @@ class ApprovalFlow:
         instance.instance_status = ApprovalInstanceStatus.APPROVED
         instance.finished_at = task.processed_at
         # 步骤 6b：单据流转 reviewing → approved（终态），并追加状态留痕（PRD 7.3）
-        self._change_status(document, DocumentStatus.APPROVED, task.approver_id, task.review_comment)
+        self._change_status(document, DocumentStatus.APPROVED, task.approver_id,
+                            task.review_comment)
         # 步骤 7b：推送审批状态变化消息（PRD 14.2）
         self._push_approval(document, instance, task)
         return task, None

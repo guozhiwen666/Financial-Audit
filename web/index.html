@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>财务单据智能风险审核系统</title>
+<style>
+  :root{--bg:#f5f6f8;--card:#fff;--line:#e3e6ea;--text:#1f2328;--muted:#6b7280;
+        --brand:#2563eb;--high:#dc2626;--medium:#d97706;--low:#059669}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 system-ui,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text)}
+  header{display:flex;align-items:center;gap:16px;padding:12px 20px;background:var(--card);
+         border-bottom:1px solid var(--line)}
+  header h1{font-size:16px;margin:0;flex:1}
+  input,button,select{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:#fff}
+  button{cursor:pointer;background:var(--brand);color:#fff;border-color:var(--brand)}
+  button.ghost{background:#fff;color:var(--text)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  main{display:grid;grid-template-columns:320px 1fr;gap:16px;padding:16px;align-items:start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .doc{padding:10px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer}
+  .doc:hover{border-color:var(--brand)}
+  .doc b{display:block}
+  .muted{color:var(--muted);font-size:12px}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .tabs button{background:#fff;color:var(--text);border:1px solid var(--line)}
+  .tabs button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:500;font-size:12px}
+  .badge{display:inline-block;padding:1px 8px;border-radius:10px;color:#fff;font-size:12px}
+  .badge.high{background:var(--high)}.badge.medium{background:var(--medium)}.badge.low{background:var(--low)}
+  pre{white-space:pre-wrap;word-break:break-word;background:#fafbfc;border:1px solid var(--line);
+      border-radius:8px;padding:12px;max-height:420px;overflow:auto;font-size:12px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  #toast{position:fixed;right:20px;bottom:20px;background:#111827;color:#fff;padding:10px 16px;
+         border-radius:8px;opacity:0;transition:.3s}
+  #toast.on{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>财务单据智能风险审核系统</h1>
+  <span id="who" class="muted"></span>
+  <select id="user">
+    <option value="applicant1">applicant1（单据申请人）</option>
+    <option value="approver1">approver1（审批人员）</option>
+    <option value="finance1">finance1（财务人员）</option>
+    <option value="admin1">admin1（系统管理员）</option>
+  </select>
+  <input id="pwd" type="password" value="123456" style="width:96px">
+  <button id="loginBtn">登录</button>
+</header>
+
+<main>
+  <section class="card">
+    <div class="row"><b>单据列表</b><button class="ghost" id="reloadBtn">刷新</button></div>
+    <div id="docs" class="muted">登录后加载</div>
+  </section>
+
+  <section class="card">
+    <div class="tabs" id="tabs"></div>
+    <div id="view" class="muted">请选择左侧单据</div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const state = { token: "", user: "", docId: null, tab: "detail", cache: {} };
+
+function toast(message) {
+  const box = document.getElementById("toast");
+  box.textContent = message; box.classList.add("on");
+  setTimeout(() => box.classList.remove("on"), 2200);
+}
+
+async function api(path, options = {}) {
+  const headers = Object.assign({}, options.headers || {});
+  if (state.token) headers["Authorization"] = "Bearer " + state.token;
+  if (options.json !== undefined) {
+    headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(options.json);
+  }
+  if (options.method && options.method !== "GET") {
+    headers["Idempotency-Key"] = "ui-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+  }
+  const resp = await fetch("/api/v1" + path, Object.assign({}, options, { headers }));
+  if (resp.status === 403) { toast("无权访问或登录已失效"); throw new Error("forbidden"); }
+  const type = resp.headers.get("content-type") || "";
+  const data = type.includes("json") ? await resp.json() : await resp.text();
+  if (!resp.ok) {
+    toast((data && data.error_message) || "请求失败");
+    throw new Error((data && data.error_message) || "error");
+  }
+  return data;
+}
+
+async function login() {
+  const username = document.getElementById("user").value;
+  const password = document.getElementById("pwd").value;
+  const data = await api("/auth/login", { method: "POST", json: { username, password } });
+  state.token = data.access_token; state.user = username;
+  document.getElementById("who").textContent =
+    data.user.display_name + "（" + data.role_codes.join("/") + "）";
+  toast("登录成功，令牌有效期 " + Math.round(data.expires_in / 60) + " 分钟");
+  loadDocuments();
+}
+
+async function loadDocuments() {
+  const data = await api("/documents?page_size=50");
+  const box = document.getElementById("docs");
+  box.innerHTML = data.items.map((d) => `
+    <div class="doc" onclick="selectDocument(${d.id})">
+      <b>${d.document_no || "（未编号）"} · ${d.document_type}</b>
+      <span class="muted">${d.applicant_department || "-"} · ¥${d.total_amount ?? "-"} ·
+        状态 ${d.document_status}</span>
+    </div>`).join("") || "暂无数据";
+  box.classList.remove("muted");
+}
+
+const TABS = [["detail", "单据详情"], ["risk", "风险分析"], ["amount", "金额核对"],
+              ["attachment", "附件与解析"], ["approval", "审批"]];
+function renderTabs() {
+  document.getElementById("tabs").innerHTML = TABS.map(([key, label]) =>
+    `<button class="${state.tab === key ? "on" : ""}" onclick="switchTab('${key}')">${label}</button>`
+  ).join("") + `<button class="ghost" onclick="startAnalysis()">发起分析</button>`;
+}
+function switchTab(tab) { state.tab = tab; renderTabs(); renderView(); }
+
+function selectDocument(id) { state.docId = id; state.cache = {}; renderTabs(); renderView(); }
+
+async function renderView() {
+  if (!state.docId) return;
+  const view = document.getElementById("view");
+  view.classList.remove("muted");
+  view.innerHTML = "加载中…";
+  try {
+    if (state.tab === "detail") {
+      const d = await api("/documents/" + state.docId);
+      state.cache.detail = d;
+      view.innerHTML = `<h3>${d.document.document_no} · ${d.document.document_type}</h3>
+        <table><tbody>
+        ${["applicant_department", "budget_department", "payee_name", "total_amount", "currency",
+           "apply_date", "reason_text", "document_status", "current_version"]
+          .map((k) => `<tr><th>${k}</th><td>${d.document[k] ?? "-"}</td></tr>`).join("")}
+        </tbody></table>
+        <h4>明细（${d.line_items.length}）</h4>
+        <table><thead><tr><th>名称</th><th>类型</th><th>金额</th><th>收款方</th></tr></thead><tbody>
+        ${d.line_items.map((i) => `<tr><td>${i.item_name ?? "-"}</td><td>${i.item_type ?? "-"}</td>
+          <td>${i.amount ?? "-"}</td><td>${i.payee_name ?? "-"}</td></tr>`).join("") ||
+          `<tr><td colspan="4" class="muted">无明细</td></tr>`}</tbody></table>
+        <h4>状态留痕（${d.status_logs.length}）</h4>
+        <table><tbody>${d.status_logs.map((s) => `<tr><td>${s.from_status ?? "-"} →
+          ${s.to_status}</td><td>${s.remark ?? ""}</td><td class="muted">${s.created_at ?? ""}</td></tr>`)
+          .join("") || `<tr><td class="muted">无</td></tr>`}</tbody></table>`;
+    } else if (state.tab === "risk") {
+      // 分析任务的查询入口在 PRD 13 章未定义「按单据列任务」，故此处沿用本次会话的分析结果
+      const taskId = state.cache.taskId;
+      if (!taskId) { view.innerHTML = "尚无分析任务，请点击「发起分析」。"; return; }
+      const panel = await api("/analysis-tasks/" + taskId + "/report");
+      view.innerHTML = `<h3>整体风险：<span class="badge ${panel.report.overall_risk_level}">
+        ${panel.report.overall_risk_level}</span> · 处理建议：${panel.report.recommendation ?? "-"}</h3>
+        <p class="muted">等级分布：${JSON.stringify(panel.level_counts)}　
+          类型分布：${JSON.stringify(panel.type_counts)}</p>
+        <table><thead><tr><th>类型</th><th>等级</th><th>标题</th><th>实际值 / 参考值</th>
+        <th>建议</th></tr></thead><tbody>
+        ${panel.findings.map((f) => `<tr><td>${f.risk_type}</td>
+          <td><span class="badge ${f.risk_level}">${f.risk_level}</span></td>
+          <td>${f.risk_title}</td>
+          <td class="muted">${JSON.stringify(f.actual_value_json)}<br>${JSON.stringify(f.reference_value_json)}</td>
+          <td>${(f.suggestion_text || "").slice(0, 80)}</td></tr>`).join("")}
+        </tbody></table>
+        <h4>报告正文</h4><pre>${(panel.report.report_markdown || "").replace(/</g, "&lt;")}</pre>
+        <button class="ghost" onclick="exportReport(${panel.report.id})">导出 Markdown</button>`;
+    } else if (state.tab === "amount") {
+      const cmp = await api("/documents/" + state.docId + "/amount-comparison");
+      view.innerHTML = `<h3>金额核对</h3><table><thead><tr><th>口径</th><th>金额</th>
+        <th>与总金额差异</th><th>偏离比例</th></tr></thead><tbody>
+        ${Object.entries(cmp.amounts).map(([k, v]) => `<tr><td>${k}</td><td>${v ?? "未提供"}</td>
+          <td>${cmp.differences[k] ?? "-"}</td><td>${cmp.deviation_ratios[k] ?? "-"}</td></tr>`).join("")}
+        </tbody></table>`;
+    } else if (state.tab === "attachment") {
+      const d = await api("/documents/" + state.docId);
+      view.innerHTML = `<h3>附件（${d.attachments.length}）</h3>
+        <table><thead><tr><th>文件名</th><th>格式</th><th>大小</th><th>存储</th><th>解析</th>
+        <th>操作</th></tr></thead><tbody>
+        ${d.attachments.map((a) => `<tr><td>${a.file_name}</td><td>${a.file_type}</td>
+          <td>${a.file_size}</td><td>${a.storage_status}</td><td>${a.parse_status}</td>
+          <td><button class="ghost" onclick="parseAttachment(${a.id})">解析</button>
+              <button class="ghost" onclick="previewAttachment(${a.id})">预览</button></td></tr>`).join("") ||
+          `<tr><td colspan="6" class="muted">无附件</td></tr>`}</tbody></table>
+        <h4>解析证据（Latest）</h4><div id="evidence" class="muted">点击「解析」后展示</div>`;
+    } else if (state.tab === "approval") {
+      const tasks = await api("/approval-tasks");
+      view.innerHTML = `<h3>我的审批任务（${tasks.total}）</h3>
+        <table><thead><tr><th>任务</th><th>节点</th><th>状态</th><th>意见</th><th>操作</th></tr></thead>
+        <tbody>${tasks.items.map((t) => `<tr><td>#${t.id}</td><td>节点 ${t.node_id}</td>
+          <td>${t.task_status}</td><td>${t.review_comment ?? "-"}</td>
+          <td>${t.task_status === "pending" ? `
+            <button onclick="decide(${t.id},'approve')">通过</button>
+            <button class="ghost" onclick="decide(${t.id},'return')">退回</button>
+            <button class="ghost" onclick="decide(${t.id},'reject')">驳回</button>` : "-"}</td>
+          </tr>`).join("") || `<tr><td colspan="5" class="muted">无待办</td></tr>`}</tbody></table>`;
+    }
+  } catch (error) {
+    view.innerHTML = `<span class="muted">加载失败：${error.message}</span>`;
+  }
+}
+
+async function startAnalysis() {
+  if (!state.docId) { toast("请先选择单据"); return; }
+  toast("分析中，请稍候（约 30 秒）…");
+  try {
+    const data = await api("/documents/" + state.docId + "/analysis", { method: "POST", json: {} });
+    state.cache.taskId = data.analysis_task.id;
+    toast("分析完成：" + data.overall_level + "，风险项 " + data.findings.length + " 条");
+    state.tab = "risk"; renderTabs(); renderView();
+  } catch (error) { /* 错误已提示 */ }
+}
+
+async function parseAttachment(attachmentId) {
+  try {
+    const data = await api("/documents/" + state.docId + "/attachments/" + attachmentId + "/parse",
+                           { method: "POST", json: {} });
+    const result = data.parse_result;
+    await renderView();  // 先刷新附件状态，再展示证据（否则会被重渲染覆盖）
+    const box = document.getElementById("evidence");
+    if (box) {
+      box.innerHTML = result
+        ? `<pre>分类：${result.document_category}　置信度：${result.confidence}
+字段：${JSON.stringify(result.fields_json, null, 2)}
+证据位置：${JSON.stringify(result.evidence_positions_json, null, 2)}</pre>`
+        : "解析失败（可重试）";
+    }
+  } catch (error) { /* 错误已提示 */ }
+}
+
+async function previewAttachment(attachmentId) {
+  const resp = await fetch("/api/v1/documents/" + state.docId + "/attachments/" + attachmentId +
+                           "?preview=true", { headers: { Authorization: "Bearer " + state.token } });
+  const blob = await resp.blob();
+  window.open(URL.createObjectURL(blob), "_blank");
+}
+
+async function decide(taskId, action) {
+  const comment = prompt("请输入审批意见：", action === "approve" ? "同意" : "");
+  if (comment === null) return;
+  try {
+    const data = await api("/approval-tasks/" + taskId + "/" + action,
+                           { method: "POST", json: { review_comment: comment } });
+    toast("已" + action + "，单据状态：" + data.document.document_status);
+    renderView(); loadDocuments();
+  } catch (error) { /* 错误已提示 */ }
+}
+
+async function exportReport(reportId) {
+  const resp = await fetch("/api/v1/review-reports/" + reportId + "/export?format=markdown",
+                           { headers: { Authorization: "Bearer " + state.token } });
+  const text = await resp.text();
+  const url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+  const link = document.createElement("a");
+  link.href = url; link.download = "risk_report_" + reportId + ".md"; link.click();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("loginBtn").onclick = login;
+document.getElementById("reloadBtn").onclick = loadDocuments;
+renderTabs();
+</script>
+</body>
+</html>

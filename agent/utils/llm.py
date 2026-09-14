@@ -10,6 +10,8 @@ import json  # 解析结构化抽取的返回
 
 from openai import OpenAI  # 已声明依赖（pyproject.toml）
 
+from config.config import llm_config  # 大模型配置（config/config.py，导入时加载 .env）
+
 __all__ = ["LLMClient"]
 
 
@@ -18,9 +20,9 @@ class LLMClient:
 
     def __init__(self, model: str) -> None:
         # 模型名由调用方从系统参数注入（PRD 2.7.9「模型配置」由系统管理员维护），本模块不设默认值；
-        # 凭据按 openai SDK 约定从环境变量读取，代码中不存放密钥。
+        # 地址与凭据统一取自 config，避免代码中存放密钥、也避免依赖调用进程是否已加载 .env
         self.model = model
-        self.client = OpenAI()
+        self.client = OpenAI(base_url=llm_config.base_url, api_key=llm_config.api_key)
 
     def complete(self, prompt: str) -> str:
         """文本生成：风险描述、业务归因、处理建议与报告正文等表达类任务（L9、L11）。"""
@@ -29,11 +31,16 @@ class LLMClient:
         return reply.choices[0].message.content or ""
 
     def extract(self, prompt: str) -> dict:
-        """结构化抽取：槽位抽取、文档分类、关键字段提取（L1、L3、L5、L6），返回 JSON 对象。"""
+        """结构化抽取：槽位抽取、文档分类、关键字段提取（L1、L3、L5、L6），返回 JSON 对象。
+
+        契约保证：一律返回字典。模型偶尔会返回 JSON 数组或标量，此时返回空字典，
+        由调用方按「缺省」处理——避免把类型异常抛进确定性流程（PRD 20.1 P1）。
+        """
         reply = self.client.chat.completions.create(
             model=self.model, messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"})
-        return json.loads(reply.choices[0].message.content or "{}")
+        data = json.loads(reply.choices[0].message.content or "{}")
+        return data if isinstance(data, dict) else {}
 
     def confidence(self, result: dict) -> float:
         """取产出携带的识别置信度（0~1），供低置信度转人工复核的阈值判定（PRD 20.1 P5）。"""

@@ -32,7 +32,7 @@ class OrchestratorAgent:
         self.summary = ""
 
     def run(self, session: ReviewSession, user_message: str, document: FinancialDocument | None,
-            has_permission: bool, task_id: int, report: ReviewReport) -> None:
+            has_permission: bool, task_id: int, report: ReviewReport | None) -> None:
         """主流程：载入会话 → 抽取槽位 → 补问槽位 → 查询单据 → 请求派发 → 汇总回复。"""
         self.step1_load_session(session)
         self.step2_extract_slots(user_message)
@@ -80,7 +80,15 @@ class OrchestratorAgent:
         self.publisher.task_status(task_id, AnalysisTaskStatus.QUEUED.value,
                                    AnalysisTaskStatus.QUEUED.value, 0)
 
-    def step6_summarize(self, task_id: int, report: ReviewReport) -> None:
-        """【大模型 L4】把风险结论汇总为自然语言回复用户，并推送 done（PRD 8.1、14.2）。"""
+    def step6_summarize(self, task_id: int, report: ReviewReport | None) -> None:
+        """【大模型 L4】把风险结论汇总为自然语言回复用户，并推送 done（PRD 8.1、14.2）。
+
+        报告尚未就绪时不汇总、也不推送 done：分析是异步任务（PRD 11.1），
+        待报告生成后由编排层带着报告再次调用本方法，完成汇总与收尾。
+        """
+        # 步骤 1：报告未就绪则不产出汇总，交由编排层在分析完成后重新调用
+        if report is None:
+            return
+        # 步骤 2：汇总正文并推送 done，标记本次任务流程结束
         self.summary = self.llm.complete("请用中文简要汇总以下风险审核结论：\n" + (report.report_markdown or ""))
         self.publisher.done(task_id, datetime.now(timezone.utc))

@@ -3,7 +3,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.env"))
+# .env 位于项目根目录（本文件在 config/ 下，故向上取一级）
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
 load_dotenv(dotenv_path=env_path, override=True)
 
 @dataclass
@@ -124,3 +125,45 @@ class FileUploadConfig:
 file_upload_config = FileUploadConfig(
     data_based_root_dir=os.getenv('DATA_BASED_ROOT_DIR')
 )
+
+@dataclass
+class DatabaseConfig:
+    """项目数据库配置：系统独立保存用户、单据、附件、审批、分析与审计数据（PRD 2.7.14）。"""
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+    charset: str
+
+database_config = DatabaseConfig(
+    host=os.getenv("DB_HOST", "127.0.0.1"),
+    port=int(os.getenv("DB_PORT", 3306)),
+    user=os.getenv("DB_USER", "root"),
+    password=os.getenv("DB_PASSWORD", ""),
+    database=os.getenv("DB_NAME", "financial_audit"),
+    charset=os.getenv("DB_CHARSET", "utf8mb4"),
+)
+
+@dataclass
+class AuthConfig:
+    """认证配置：访问令牌须设置有效期与撤销机制（PRD 2.7.14）。"""
+    secret_key: str
+    algorithm: str
+    expire_minutes: int
+
+auth_config = AuthConfig(
+    secret_key=os.getenv("JWT_SECRET_KEY", ""),
+    algorithm="HS256",
+    expire_minutes=int(os.getenv("JWT_EXPIRE_MINUTES", 120)),
+)
+
+@dataclass
+class StorageConfig:
+    """附件存储配置：附件独立保存并按权限访问（PRD 2.7.14）。"""
+    root_dir: str
+
+storage_config = StorageConfig(
+    root_dir=os.getenv("STORAGE_ROOT_DIR", "storage")
+)
+
